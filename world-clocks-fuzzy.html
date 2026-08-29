@@ -3,35 +3,69 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>World Clocks — Autosuggest Timezones</title>
+<title>World Clocks — Digital time zones</title>
 <style>
-  :root{--bg:#f6efe1;--card:#fff;--muted:#6b5d4c;--accent:#b8720a;--line:#dccba0;--ink:#2b2118}
+  :root{
+    --bg:#f6efe1;
+    --card:#fff;
+    --muted:#6b5d4c;
+    --accent:#b8720a;
+    --accent-2:#a85c1a;
+    --line:#dccba0;
+    --ink:#2b2118;
+    --glass: rgba(255,255,255,0.6);
+  }
   *{box-sizing:border-box}
-  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:18px;background:linear-gradient(180deg,var(--bg),#fff);color:var(--ink)}
-  h1{font-family:Zilla Slab,serif;margin:0 0 12px;font-size:20px}
-  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-  .search{position:relative;min-width:240px}
-  input[type=text]{padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);font-size:14px;color:var(--ink);width:100%}
-  .btn{background:var(--accent);color:#fff;border:none;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
-  .ghost{background:transparent;border:1px solid var(--line);color:var(--muted);padding:8px 10px;border-radius:8px}
-  .list{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--card);border:1px solid var(--line);border-radius:8px;max-height:220px;overflow:auto;z-index:40}
-  .item{padding:8px 10px;cursor:pointer}
-  .item[aria-selected="true"]{background:var(--accent);color:#fff}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-  .clock{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
-  .time{font-family:IBM Plex Mono,monospace;font-size:18px;font-weight:700}
-  .muted{color:var(--muted);font-size:13px}
-  .remove{background:transparent;border:1px solid var(--line);padding:6px;border-radius:8px;cursor:pointer;color:var(--muted)}
-  .help{font-size:13px;color:var(--muted);margin-top:10px}
+  body{
+    margin:0;
+    font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+    background:linear-gradient(180deg,var(--bg),#fff);
+    color:var(--ink);
+    padding:20px;
+  }
+  h1{font-family: "Zilla Slab", serif; margin:0 0 12px; font-size:20px;}
+  .controls{
+    display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px;
+  }
+  input[type="text"], select {
+    padding:8px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);font-size:14px;color:var(--ink);
+  }
+  button{
+    background:var(--accent);color:#fff;border:none;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer;
+  }
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line);}
+  button.icon{padding:8px;border-radius:10px;font-weight:600}
+  .tog{
+    display:inline-flex;align-items:center;gap:8px;background:var(--card);padding:6px;border-radius:999px;border:1px solid var(--line);
+  }
+
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+    gap:12px;
+  }
+  .clock{
+    background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:96px;
+  }
+  .tz-name{font-weight:700;display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .tz-id{font-size:13px;color:var(--muted);word-break:break-all}
+  .time{font-family:"IBM Plex Mono", monospace;font-size:20px;font-weight:700;}
+  .secs{font-family:"IBM Plex Mono",monospace;color:var(--muted);font-size:13px}
+  .date{font-size:13px;color:var(--muted)}
+  .tz-short{font-size:13px;color:var(--accent-2);font-weight:700}
+  .small-row{display:flex;justify-content:space-between;align-items:center}
+  .empty{padding:24px;text-align:center;color:var(--muted);border:1px dashed var(--line);border-radius:12px}
+  @media(max-width:480px){.controls{flex-direction:column;align-items:stretch}}
+  .remove-btn{background:transparent;border:1px solid var(--line);color:var(--muted);padding:6px;border-radius:8px;cursor:pointer}
+  .footer{margin-top:14px;color:var(--muted);font-size:13px;text-align:center}
 </style>
 </head>
 <body>
-  <h1>World Clocks — Timezone autosuggest</h1>
+  <h1>World clocks — Digital time zones</h1>
 
-  <div class="controls">
-    <div class="search" style="flex:1;min-width:220px;">
-      <label for="tz" class="sr-only">Timezone</label>
-      <input id="tz" type="text" placeholder="e.g. Asia/Kolkata or UTC" aria-autocomplete="list" aria-controls="tz-list" aria-expanded="false" autocomplete="off">
+  <div class="controls" aria-label="Clock controls">
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="tzInput" list="tzList" placeholder="e.g. Asia/Kolkata or UTC" aria-label="Timezone name">
       <datalist id="tzList">
         <option>UTC</option>
         <option>Local</option>
@@ -70,7 +104,7 @@
 
   // UI refs
   const clocksEl = document.getElementById('clocks');
-  const tzInput = document.getElementById('tz');
+  const tzInput = document.getElementById('tzInput');
   const addBtn = document.getElementById('addBtn');
   const addLocalBtn = document.getElementById('addLocal');
   const clearAllBtn = document.getElementById('clearAll');
@@ -80,7 +114,7 @@
   // state
   let zones = loadZones();
   let settings = loadSettings();
-
+  
   // ensure at least defaults
   if(!zones || zones.length===0){
     zones = DEFAULT_ZONES.slice();
@@ -168,8 +202,7 @@
       const header = document.createElement('div');
       header.className = 'tz-name';
       const title = document.createElement('div');
-      title.innerHTML = `<div style="font-weight:800">${escapeHtml(displayLabel(tz))}</div>
-                         <div class="tz-id">${escapeHtml(tz)}</div>`;
+      title.innerHTML = `<div style="font-weight:800">${escapeHtml(displayLabel(tz))}</div>`;
       const remove = document.createElement('button');
       remove.className = 'remove-btn';
       remove.type = 'button';
@@ -273,7 +306,7 @@
     return tz;
   }
   function encodeId(s){ return btoa(unescape(encodeURIComponent(s))).replace(/=+$/,''); }
-  function escapeHtml(s){ return String(s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function escapeHtml(s){ return String(s||'').replace(/[&<>\"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
   // Validate timezone by trying to create a formatter — RangeError thrown for invalid tz
   function isValidTimeZone(tz){
