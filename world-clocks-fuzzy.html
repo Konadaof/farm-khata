@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>World Clocks — Farm Khata (Fuzzy Autosuggest)</title>
+<link href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#F6EFE1;--card:#fff;--muted:#6B5D4C;--accent:#B8720A;--accent-2:#A85C1A;--line:#DCCBA0;--ink:#2B2118;
+    --glass: rgba(255,255,255,0.6);
+  }
+  *{box-sizing:border-box}
+  body{margin:18px;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,'Helvetica Neue',Arial;background:linear-gradient(180deg,var(--bg),#fff);color:var(--ink)}
+  h1{font-family:Zilla Slab,serif;margin:0 0 12px;font-size:20px}
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+  .search{position:relative;min-width:260px;flex:1}
+  input[type=text]{padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card);font-size:14px;color:var(--ink);width:100%}
+  .btn{background:var(--accent);color:#fff;border:none;padding:9px 12px;border-radius:10px;font-weight:700;cursor:pointer}
+  .ghost{background:transparent;border:1px solid var(--line);color:var(--muted);padding:8px 10px;border-radius:10px}
+  .list{position:absolute;left:0;right:0;top:calc(100% + 8px);background:var(--card);border:1px solid var(--line);border-radius:10px;max-height:260px;overflow:auto;z-index:40}
+  .item{padding:8px 10px;cursor:pointer}
+  .item[aria-selected="true"]{background:var(--accent);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .clock{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;min-height:96px}
+  .tz-head{display:flex;justify-content:space-between;align-items:center}
+  .tz-name{font-weight:700}
+  .tz-id{font-size:13px;color:var(--muted)}
+  .time{font-family:'IBM Plex Mono',monospace;font-size:20px;font-weight:700}
+  .secs{font-family:'IBM Plex Mono',monospace;color:var(--muted);font-size:13px}
+  .date{font-size:13px;color:var(--muted)}
+  .remove{background:transparent;border:1px solid var(--line);padding:6px;border-radius:8px;cursor:pointer;color:var(--muted)}
+  .controls-right{display:flex;gap:8px;align-items:center;margin-left:auto}
+
+  /* Dark mode */
+  .dark{background:linear-gradient(180deg,#2b2118,#1f1a16);color:#efe6d6}
+  .dark .clock{background:#3a2f26;border-color:#5a4a3d}
+  .dark input[type=text]{background:#513f33;color:#efe6d6;border-color:#725b4d}
+  .dark .ghost{border-color:#5a4a3d;color:#efe6d6}
+  .dark .list{background:#3a2f26;border-color:#5a4a3d}
+
+  .help{font-size:13px;color:var(--muted);margin-top:10px}
+  @media(max-width:480px){.toolbar{flex-direction:column;align-items:stretch}}
+</style>
+</head>
+<body id="page">
+  <h1>World clocks — fuzzy timezone autosuggest</h1>
+  <div class="toolbar" role="region" aria-label="Clock controls">
+    <div class="search">
+      <label for="tz" class="sr-only">Timezone</label>
+      <input id="tz" type="text" placeholder="Type to search timezones (e.g. Asia/Kolkata)" aria-autocomplete="list" aria-controls="tz-list" aria-expanded="false" autocomplete="off" />
+      <div id="tz-list" class="list" role="listbox" hidden></div>
+    </div>
+    <button id="add" class="btn">Add</button>
+    <button id="add-local" class="ghost">Add Local</button>
+    <div class="controls-right">
+      <button id="toggle24" class="ghost">24h</button>
+      <button id="toggleDark" class="ghost">Dark</button>
+      <button id="clear" class="ghost">Clear</button>
+    </div>
+  </div>
+
+  <div id="clocks" class="grid" aria-live="polite"></div>
+  <div class="help">Tip: use arrow keys to navigate suggestions. This feature uses browser timezone data when available for the full IANA list and falls back to a curated set.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2/dist/fuse.min.js"></script>
+<script>
+(async function(){
+  const STORAGE_KEY = 'farmkhata:worldclocks:zones';
+  const SETTINGS_KEY = 'farmkhata:worldclocks:settings';
+
+  const fallbackList = [
+    'UTC','Asia/Kolkata','Europe/London','America/New_York','America/Los_Angeles','Asia/Tokyo','Asia/Shanghai','Asia/Singapore','Australia/Sydney','Europe/Paris','Europe/Berlin','Asia/Dubai','Africa/Johannesburg'
+  ];
+
+  // attempt to load full list from Intl if available, otherwise use fallback
+  let ianaList = [];
+  try{
+    if(typeof Intl.supportedValuesOf === 'function'){
+      ianaList = Intl.supportedValuesOf('timeZone');
+    }
+  }catch(e){ /* ignore */ }
+  if(!ianaList || !ianaList.length) ianaList = fallbackList.slice();
+
+  // Prepare Fuse with the timezone strings
+  const fuse = new Fuse(ianaList.map(t=>({tz:t})), { keys:['tz'], threshold:0.35, includeScore:true });
+
+  const input = document.getElementById('tz');
+  const list = document.getElementById('tz-list');
+  const addBtn = document.getElementById('add');
+  const addLocal = document.getElementById('add-local');
+  const clearBtn = document.getElementById('clear');
+  const clocksEl = document.getElementById('clocks');
+  const toggle24Btn = document.getElementById('toggle24');
+  const toggleDarkBtn = document.getElementById('toggleDark');
+  const page = document.getElementById('page');
+
+  let suggestions = [];
+  let cursor = -1;
+  let zones = loadZones() || ['Local','UTC','Asia/Kolkata'];
+  let settings = loadSettings() || {is24:true,dark:false};
+  applySettings();
+
+  input.addEventListener('input', debounce(onInput,120));
+  input.addEventListener('keydown', onKeyDown);
+  input.addEventListener('blur', ()=>setTimeout(()=>hideList(),150));
+  addBtn.addEventListener('click', commitInput);
+  addLocal.addEventListener('click', ()=>addZone('Local'));
+  clearBtn.addEventListener('click', ()=>{ if(confirm('Clear all clocks?')){ zones=[]; saveZones(); render(); }});
+  toggle24Btn.addEventListener('click', ()=>{ settings.is24 = !settings.is24; saveSettings(); applySettings(); renderTimes(); });
+  toggleDarkBtn.addEventListener('click', ()=>{ settings.dark = !settings.dark; saveSettings(); applySettings(); });
+
+  render();
+  setInterval(renderTimes, 1000);
+
+  function onInput(e){
+    const q = e.target.value.trim();
+    if(!q){ hideList(); return; }
+    suggestions = search(q);
+    renderList();
+  }
+
+  function search(q){
+    // prefer exact prefix matches then fuzzy
+    const prefix = ianaList.filter(t=>t.toLowerCase().startsWith(q.toLowerCase()));
+    if(prefix.length) return prefix.slice(0,50);
+    const res = fuse.search(q, {limit:50}).map(r=>r.item.tz);
+    return res.length ? res : ianaList.filter(t=>t.toLowerCase().includes(q.toLowerCase())).slice(0,50);
+  }
+
+  function renderList(){
+    list.innerHTML = '';
+    if(!suggestions.length){ hideList(); return; }
+    list.hidden = false; input.setAttribute('aria-expanded','true');
+    suggestions.forEach((s,i)=>{
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.role = 'option';
+      div.tabIndex = -1;
+      div.textContent = s;
+      div.dataset.index = i;
+      div.addEventListener('click', ()=>chooseSuggestion(i));
+      div.addEventListener('mouseenter', ()=>{ cursor = i; updateActive(); });
+      list.appendChild(div);
+    });
+    cursor = -1;
+  }
+
+  function updateActive(){
+    Array.from(list.children).forEach((ch,i)=>{ if(i===cursor) { ch.setAttribute('aria-selected','true'); ch.scrollIntoView({block:'nearest'}); } else ch.setAttribute('aria-selected','false'); });
+  }
+
+  function chooseSuggestion(i){ input.value = suggestions[i]; hideList(); input.focus(); }
+
+  function hideList(){ if(list) list.hidden = true; if(input) input.setAttribute('aria-expanded','false'); cursor = -1; }
+
+  function onKeyDown(e){ if(list.hidden) return; if(e.key==='ArrowDown'){ e.preventDefault(); cursor = Math.min(cursor+1, suggestions.length-1); updateActive(); } else if(e.key==='ArrowUp'){ e.preventDefault(); cursor = Math.max(cursor-1, 0); updateActive(); } else if(e.key==='Enter'){ e.preventDefault(); if(cursor>=0) chooseSuggestion(cursor); else commitInput(); } else if(e.key==='Escape'){ hideList(); } }
+
+  function commitInput(){ const v = input.value.trim(); if(!v) return; addZone(v); input.value = ''; hideList(); }
+
+  function normalize(s){ if(!s) return 'Local'; const v = s.trim(); if(/^local$/i.test(v)) return 'Local'; return v; }
+
+  function addZone(id){ const norm = normalize(id); if(norm!=='Local' && !isValidTimeZone(norm)){ alert('Invalid timezone identifier. Use an IANA timezone like "Asia/Kolkata".'); return; } zones = [norm, ...zones.filter(z=>z!==norm)]; saveZones(); render(); }
+
+  function isValidTimeZone(tz){ if(!tz) return false; if(tz==='Local') return true; try{ new Intl.DateTimeFormat(undefined, {timeZone: tz}); return true; }catch(e){ return false; } }
+
+  function render(){ clocksEl.innerHTML = ''; if(!zones.length){ clocksEl.innerHTML = '<div class="clock">No clocks yet — add a timezone to get started.</div>'; return; } zones.forEach(tz => { const card = document.createElement('div'); card.className='clock'; const head = document.createElement('div'); head.className='tz-head'; const title = document.createElement('div'); title.innerHTML = '<div class="tz-name">'+escapeHtml(displayLabel(tz))+'</div><div class="tz-id">'+escapeHtml(tz)+'</div>'; const rm = document.createElement('button'); rm.className='remove'; rm.textContent='Remove'; rm.addEventListener('click', ()=>{ if(confirm('Remove this clock?')){ zones = zones.filter(x=>x!==tz); saveZones(); render(); }}); head.appendChild(title); head.appendChild(rm); const timeEl = document.createElement('div'); timeEl.className='time'; timeEl.id = 'time-'+idEncode(tz); const dateEl = document.createElement('div'); dateEl.className='date'; dateEl.id = 'date-'+idEncode(tz); card.appendChild(head); card.appendChild(timeEl); card.appendChild(dateEl); clocksEl.appendChild(card); }); renderTimes(); }
+
+  function renderTimes(){ const now = new Date(); zones.forEach(tz=>{ const id = idEncode(tz); const timeEl = document.getElementById('time-'+id); const dateEl = document.getElementById('date-'+id); if(!timeEl) return; const tzOpt = tz==='Local' ? undefined : tz; try{ const opts = { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: !settings.is24, timeZone: tzOpt }; const parts = new Intl.DateTimeFormat(undefined, opts).formatToParts(now); const secPart = parts.find(p=>p.type==='second')?.value || ''; const withoutSeconds = parts.filter(p=>p.type!=='second').map(p=>p.value).join(''); timeEl.textContent = withoutSeconds + (secPart?':' + secPart:''); const dateOpts = { weekday:'short', day:'2-digit', month:'short', year:'numeric', timeZone: tzOpt }; dateEl.textContent = new Intl.DateTimeFormat(undefined, dateOpts).format(now); }catch(e){ timeEl.textContent = 'Invalid timezone'; dateEl.textContent = ''; } }); }
+
+  function displayLabel(tz){ if(tz==='Local'){ return 'Local (' + (Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local') + ')'; } return tz; }
+  function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  function idEncode(s){ return btoa(unescape(encodeURIComponent(s))).replace(/=+$/,''); }
+
+  function saveZones(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(zones)); }
+  function loadZones(){ try{ const r = localStorage.getItem(STORAGE_KEY); return r? JSON.parse(r): null; }catch(e){ return null; } }
+  function saveSettings(){ localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+  function loadSettings(){ try{ const r = localStorage.getItem(SETTINGS_KEY); return r? JSON.parse(r): null; }catch(e){ return null; } }
+  function applySettings(){ toggle24Btn.textContent = settings.is24 ? '24h' : '12h'; if(settings.dark) page.classList.add('dark'); else page.classList.remove('dark'); }
+
+  // small utility: debounce
+  function debounce(fn, ms){ let t; return function(...args){ clearTimeout(t); t = setTimeout(()=>fn.apply(this,args), ms); }; }
+
+})();
+</script>
+</body>
+</html>
