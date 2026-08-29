@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>World Clocks — Autosuggest Timezones</title>
+<style>
+  :root{--bg:#f6efe1;--card:#fff;--muted:#6b5d4c;--accent:#b8720a;--line:#dccba0;--ink:#2b2118}
+  *{box-sizing:border-box}
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;margin:18px;background:linear-gradient(180deg,var(--bg),#fff);color:var(--ink)}
+  h1{font-family:Zilla Slab,serif;margin:0 0 12px;font-size:20px}
+  .controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .search{position:relative;min-width:240px}
+  input[type=text]{padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);font-size:14px;color:var(--ink);width:100%}
+  .btn{background:var(--accent);color:#fff;border:none;padding:8px 10px;border-radius:8px;font-weight:700;cursor:pointer}
+  .ghost{background:transparent;border:1px solid var(--line);color:var(--muted);padding:8px 10px;border-radius:8px}
+  .list{position:absolute;left:0;right:0;top:calc(100% + 6px);background:var(--card);border:1px solid var(--line);border-radius:8px;max-height:220px;overflow:auto;z-index:40}
+  .item{padding:8px 10px;cursor:pointer}
+  .item[aria-selected="true"]{background:var(--accent);color:#fff}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+  .clock{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .time{font-family:IBM Plex Mono,monospace;font-size:18px;font-weight:700}
+  .muted{color:var(--muted);font-size:13px}
+  .remove{background:transparent;border:1px solid var(--line);padding:6px;border-radius:8px;cursor:pointer;color:var(--muted)}
+  .help{font-size:13px;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+  <h1>World Clocks — Timezone autosuggest</h1>
+  <div class="controls">
+    <div class="search" style="flex:1;min-width:220px;">
+      <label for="tz" class="sr-only">Timezone</label>
+      <input id="tz" type="text" placeholder="Start typing a timezone (e.g. Asia/Kolkata)" aria-autocomplete="list" aria-controls="tz-list" aria-expanded="false" autocomplete="off">
+      <div id="tz-list" class="list" role="listbox" hidden></div>
+    </div>
+    <button id="add" class="btn">Add</button>
+    <button id="add-local" class="ghost">Add Local</button>
+    <button id="clear" class="ghost">Clear</button>
+  </div>
+  <div id="clocks" class="grid" aria-live="polite"></div>
+  <div class="help">Tip: use the up/down arrow keys to navigate suggestions, Enter to choose. You can paste any IANA timezone identifier.</div>
+
+<script>
+(function(){
+  // small curated list of IANA timezones for autosuggest. This covers common zones and a good spread.
+  const TIMEZONES = [
+    'UTC','GMT','Pacific/Midway','Pacific/Honolulu','America/Anchorage','America/Los_Angeles','America/Denver','America/Chicago','America/New_York','America/Caracas','America/Sao_Paulo','America/Argentina/Buenos_Aires',
+    'Atlantic/Azores','Europe/London','Europe/Dublin','Europe/Berlin','Europe/Paris','Europe/Madrid','Europe/Rome','Europe/Amsterdam','Europe/Zurich','Europe/Prague','Europe/Warsaw','Europe/Athens','Europe/Istanbul',
+    'Africa/Cairo','Africa/Johannesburg','Asia/Jerusalem','Asia/Dubai','Asia/Karachi','Asia/Kolkata','Asia/Dhaka','Asia/Bangkok','Asia/Ho_Chi_Minh','Asia/Singapore','Asia/Shanghai','Asia/Tokyo','Asia/Seoul',
+    'Australia/Darwin','Australia/Sydney','Pacific/Guam','Pacific/Auckland','Pacific/Fiji'
+  ];
+
+  const STORAGE = 'farmkhata:worldclocks:zones';
+  const SETTINGS = 'farmkhata:worldclocks:settings';
+
+  const input = document.getElementById('tz');
+  const list = document.getElementById('tz-list');
+  const addBtn = document.getElementById('add');
+  const addLocal = document.getElementById('add-local');
+  const clearBtn = document.getElementById('clear');
+  const clocksEl = document.getElementById('clocks');
+
+  let zones = load() || ['Local','UTC','Asia/Kolkata'];
+  let cursor = -1; // suggestion selection index
+  let suggestions = [];
+  let settings = loadSettings() || {is24:true};
+
+  // event handlers
+  input.addEventListener('input', onInput);
+  input.addEventListener('keydown', onKeyDown);
+  input.addEventListener('blur', ()=>{ setTimeout(()=>hideList(),150); });
+  addBtn.addEventListener('click', ()=>commitInput());
+  addLocal.addEventListener('click', ()=>addZone('Local'));
+  clearBtn.addEventListener('click', ()=>{ if(confirm('Clear all clocks?')){ zones = []; save(); render(); }});
+
+  render();
+  setInterval(renderTimes, 1000);
+
+  function onInput(e){
+    const q = e.target.value.trim();
+    if(!q){ hideList(); return; }
+    suggestions = getSuggestions(q);
+    renderList();
+  }
+
+  function onKeyDown(e){
+    if(list.hidden) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); cursor = Math.min(cursor+1, suggestions.length-1); updateActive(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); cursor = Math.max(cursor-1, 0); updateActive(); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(cursor>=0) chooseSuggestion(cursor); else commitInput(); }
+    else if(e.key==='Escape'){ hideList(); }
+  }
+
+  function getSuggestions(q){
+    const low = q.toLowerCase();
+    // combine curated list and previously used zones for better matches
+    const pool = Array.from(new Set([].concat(zones).concat(TIMEZONES)));
+    return pool.filter(tz => tz.toLowerCase().includes(low)).slice(0,30);
+  }
+
+  function renderList(){
+    list.innerHTML = '';
+    if(!suggestions.length){ hideList(); return; }
+    list.hidden = false; input.setAttribute('aria-expanded','true');
+    suggestions.forEach((s,i)=>{
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.role = 'option';
+      div.tabIndex = -1;
+      div.textContent = s;
+      div.dataset.index = i;
+      div.addEventListener('click', ()=>chooseSuggestion(i));
+      div.addEventListener('mouseenter', ()=>{ cursor = i; updateActive(); });
+      list.appendChild(div);
+    });
+    cursor = -1;
+  }
+
+  function updateActive(){
+    Array.from(list.children).forEach((ch, i)=>{
+      if(i===cursor){ ch.setAttribute('aria-selected','true'); ch.scrollIntoView({block:'nearest'}); }
+      else ch.setAttribute('aria-selected','false');
+    });
+  }
+
+  function hideList(){ list.hidden = true; input.setAttribute('aria-expanded','false'); cursor = -1; }
+
+  function chooseSuggestion(i){ input.value = suggestions[i]; hideList(); input.focus(); }
+
+  function commitInput(){
+    const v = input.value.trim();
+    if(!v) return;
+    addZone(v);
+    input.value = '';
+    hideList();
+  }
+
+  function addZone(id){
+    const norm = normalize(id);
+    if(!isValidTimeZone(norm)){
+      alert('Invalid timezone identifier. Use an IANA timezone like "Asia/Kolkata" or "America/New_York".');
+      return;
+    }
+    zones = [norm, ...zones.filter(z=>z!==norm)];
+    save(); render();
+  }
+
+  function normalize(s){ if(!s) return 'Local'; s = s.trim(); if(/^local$/i.test(s)) return 'Local'; return s; }
+
+  function isValidTimeZone(tz){ if(!tz) return false; if(tz==='Local') return true; try{ new Intl.DateTimeFormat(undefined, {timeZone: tz}); return true; }catch(e){ return false; } }
+
+  function render(){
+    clocksEl.innerHTML = '';
+    if(zones.length===0){ clocksEl.innerHTML = '<div class="clock muted">No clocks — add a timezone to get started.</div>'; return; }
+    zones.forEach(tz=>{
+      const card = document.createElement('div'); card.className='clock';
+      const head = document.createElement('div'); head.style.display='flex'; head.style.justifyContent='space-between'; head.style.alignItems='center';
+      const title = document.createElement('div'); title.innerHTML = '<div style="font-weight:800">'+escapeHtml(displayLabel(tz))+'</div><div class="muted">'+escapeHtml(tz)+'</div>';
+      const btn = document.createElement('button'); btn.className='remove'; btn.textContent='Remove'; btn.addEventListener('click', ()=>{ if(confirm('Remove this clock?')){ zones = zones.filter(x=>x!==tz); save(); render(); }});
+      head.appendChild(title); head.appendChild(btn);
+
+      const time = document.createElement('div'); time.className='time'; time.id = 'time-'+idEncode(tz);
+      const date = document.createElement('div'); date.className='muted'; date.id = 'date-'+idEncode(tz);
+
+      card.appendChild(head); card.appendChild(time); card.appendChild(date);
+      clocksEl.appendChild(card);
+    });
+    renderTimes();
+  }
+
+  function renderTimes(){
+    const now = new Date();
+    zones.forEach(tz=>{
+      const id = idEncode(tz);
+      const timeEl = document.getElementById('time-'+id);
+      const dateEl = document.getElementById('date-'+id);
+      if(!timeEl) return;
+      const tzOpt = tz==='Local' ? undefined : tz;
+      try{
+        const opts = {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12: !settings.is24, timeZone: tzOpt};
+        const parts = new Intl.DateTimeFormat(undefined, opts).formatToParts(now);
+        const sec = parts.find(p=>p.type==='second')?.value || '';
+        const withoutSeconds = parts.filter(p=>p.type!=='second').map(p=>p.value).join('');
+        timeEl.textContent = withoutSeconds + (sec?':'+sec:'');
+        const dateOpts = {weekday:'short', day:'2-digit', month:'short', year:'numeric', timeZone: tzOpt};
+        dateEl.textContent = new Intl.DateTimeFormat(undefined, dateOpts).format(now);
+      }catch(e){ timeEl.textContent = 'Invalid timezone'; dateEl.textContent = ''; }
+    });
+  }
+
+  function displayLabel(tz){ if(tz==='Local'){ const local = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local'; return 'Local ('+local+')'; } return tz; }
+  function escapeHtml(s){ return String(s||'').replace(/[&<>'"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[c])); }
+  function idEncode(s){ return btoa(unescape(encodeURIComponent(s))).replace(/=+$/,''); }
+
+  function save(){ localStorage.setItem(STORAGE, JSON.stringify(zones)); }
+  function load(){ try{ const r = localStorage.getItem(STORAGE); return r? JSON.parse(r): null;}catch(e){return null;} }
+  function loadSettings(){ try{ const r=localStorage.getItem(SETTINGS); return r?JSON.parse(r):null;}catch(e){return null;} }
+
+})();
+</script>
+</body>
+</html>
